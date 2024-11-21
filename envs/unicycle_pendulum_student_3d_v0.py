@@ -15,13 +15,18 @@ DEFAULT_CAMERA_CONFIG = {
     "lookat": np.array((0.0, 0.0, 1.0)),
 }
 
-class UnicyclePendulumTrajectory(MujocoEnv, utils.EzPickle):
+class UnicyclePendulumStudent(MujocoEnv, utils.EzPickle):
     metadata = {
         "render_modes": ["human", "rgb_array", "depth_array"],
     }
     
     """
-    ## Student agent environment code for the Unicycle Project.
+    ##########################################################################################################################
+    ##########################################################################################################################
+    ############################ Student agent environment code for the Unicycle Project #####################################
+    ##########################################################################################################################
+    ##########################################################################################################################
+
 
     ## Description
     This environment simulates a unicycle with an inverted pendulum attached to it. 
@@ -87,8 +92,25 @@ class UnicyclePendulumTrajectory(MujocoEnv, utils.EzPickle):
 
     ## Solved Requirement
     The environment is considered solved when the agent can consistently move the unicycle 12 meters forward while maintaining balance.
-    To obtain the ideal model, training will be end once the unicycle agent passed 12 meters 1000 times. (verified through testing 10^x goal reaching experiment)
+    To obtain the ideal reference model, training will be end once the unicycle agent passed 12 meters 10 times. (verified through testing 10^x goal reaching experiment)
     """
+
+    # Environment Constants
+    GOAL_DISTANCE = 12.0
+    MAX_STEPS = 1000
+    REQUIRED_SUCCESSES = 10
+    
+    # Reward Constants
+    BALANCE_SCALE = 0.5
+    FORWARD_SCALE = 2.0
+    TILT_PENALTY = -5.0
+    WHEEL_SPEED_PENALTY_SCALE = -0.05
+    Y_PENALTY_SCALE = -0.5
+    GOAL_REWARD = 100.0
+    
+    # Angle Thresholds (in radians)
+    MAX_TILT_ANGLE = np.pi/3
+    PENALTY_TILT_ANGLE = np.pi/4
 
     def __init__(
         self,
@@ -96,7 +118,6 @@ class UnicyclePendulumTrajectory(MujocoEnv, utils.EzPickle):
         frame_skip: int = 2,
         default_camera_config: Dict[str, Union[float, int, np.ndarray]] = DEFAULT_CAMERA_CONFIG,
         reset_noise_scale: float = 0.01,
-        max_steps: int = 10000,
         **kwargs,
     ):
         # Use default XML file if not provided
@@ -104,7 +125,7 @@ class UnicyclePendulumTrajectory(MujocoEnv, utils.EzPickle):
             xml_file = os.path.join(os.path.dirname(__file__), "assets", "unicycle_pendulum_3d.xml")
         
         # Initialize EzPickle
-        utils.EzPickle.__init__(self, xml_file, frame_skip, reset_noise_scale, max_steps, **kwargs)
+        utils.EzPickle.__init__(self, xml_file, frame_skip, reset_noise_scale, self.MAX_STEPS, **kwargs)
         
         # Define observation and action spaces
         observation_space = Box(low=-np.inf, high=np.inf, shape=(22,), dtype=np.float64)
@@ -112,15 +133,11 @@ class UnicyclePendulumTrajectory(MujocoEnv, utils.EzPickle):
         
         # Set environment parameters
         self._reset_noise_scale = reset_noise_scale
-        self.max_steps = max_steps
+        self.max_steps = self.MAX_STEPS
         self.total_episodes = 0
         self.success_count = 0
-        self.required_successes = 10000
-        self.goal_distance = 12.0  # 12 meters goal
         self.prev_x = 0
         self.goal_reached = False
-        self.strict_mode = False
-        self.strict_mode_threshold = 100  # Activate after reaching goal 100 times
 
         # Initialize MujocoEnv
         MujocoEnv.__init__(
@@ -167,14 +184,10 @@ class UnicyclePendulumTrajectory(MujocoEnv, utils.EzPickle):
         return observation, reward, terminated, truncated, info
 
     def _update_success_count(self, x_pos: float) -> None:
-        # Increase success count when first crossing 12-meter mark
-        if self.prev_x < 12 and x_pos >= 12:
+        # Increase success count when first crossing goal distance mark
+        if self.prev_x < self.GOAL_DISTANCE and x_pos >= self.GOAL_DISTANCE:
             self.success_count += 1
             self.goal_reached = True
-            
-            # Activate strict mode if success count reaches threshold
-            if self.success_count >= self.strict_mode_threshold:
-                self.strict_mode = True
         
         self.prev_x = x_pos
 
@@ -192,31 +205,31 @@ class UnicyclePendulumTrajectory(MujocoEnv, utils.EzPickle):
         unicycle_roll, unicycle_pitch, _ = unicycle_euler
         pendulum_roll, pendulum_pitch, _ = pendulum_euler
         
-        # Balance reward
-        balance_reward = 0.5 * (1.0 - 0.5 * (unicycle_roll**2 + unicycle_pitch**2 + pendulum_roll**2 + pendulum_pitch**2))
+        # Normalize angles to [-1, 1] range for smoother rewards
+        balance_term = (unicycle_roll**2 + unicycle_pitch**2 + 
+                    pendulum_roll**2 + pendulum_pitch**2) / (self.PENALTY_TILT_ANGLE**2)
         
-        # Forward reward (increased in strict mode)
-        forward_reward = 2.0 * x_pos if not self.strict_mode else 3.0 * x_pos
+        # Compute individual reward components
+        balance_reward = self.BALANCE_SCALE * (1.0 - 0.5 * balance_term)
+        forward_reward = self.FORWARD_SCALE * x_pos
+        velocity_reward = max(min(observation[12], 2.0), -1.0)  # Clipped x-velocity reward
         
-        # Velocity reward
-        velocity_reward = observation[12]  # x-velocity
+        # Penalties
+        tilt_penalty = self.TILT_PENALTY if (abs(unicycle_roll) > self.PENALTY_TILT_ANGLE or 
+                                        abs(unicycle_pitch) > self.PENALTY_TILT_ANGLE or
+                                        abs(pendulum_roll) > self.PENALTY_TILT_ANGLE or 
+                                        abs(pendulum_pitch) > self.PENALTY_TILT_ANGLE) else 0.0
         
-        # Penalty for excessive tilt
-        tilt_penalty = -5.0 if (abs(unicycle_roll) > np.pi/4 or abs(unicycle_pitch) > np.pi/4 or
-                                abs(pendulum_roll) > np.pi/4 or abs(pendulum_pitch) > np.pi/4) else 0.0
+        wheel_speed_penalty = self.WHEEL_SPEED_PENALTY_SCALE * min(observation[21]**2, 100)
+        y_penalty = self.Y_PENALTY_SCALE * min(abs(y_pos), 2.0)
         
-        # Penalty for excessive wheel speed
-        wheel_speed_penalty = -0.05 * observation[21]**2  # Last element is wheel angular velocity
+        # Combine rewards
+        reward = (balance_reward + forward_reward + velocity_reward + 
+                tilt_penalty + wheel_speed_penalty + y_penalty)
         
-        # Penalty for y-axis movement
-        y_penalty = -0.5 * abs(y_pos)
-        
-        # Calculate total reward
-        reward = balance_reward + forward_reward + velocity_reward + tilt_penalty + wheel_speed_penalty + y_penalty
-        
-        # Additional reward for reaching goal
+        # Goal reward
         if self.goal_reached:
-            reward += 100
+            reward += self.GOAL_REWARD
         
         return reward
 
@@ -226,13 +239,12 @@ class UnicyclePendulumTrajectory(MujocoEnv, utils.EzPickle):
         
         # Check termination conditions
         return bool(
-            (self.strict_mode and abs(y_pos) > 1.0) or  # y-axis movement limit in strict mode
-            abs(unicycle_roll) > np.pi/3 or  # Excessive unicycle tilt
-            abs(unicycle_pitch) > np.pi/3 or
-            abs(pendulum_roll) > np.pi/3 or  # Excessive pendulum tilt
-            abs(pendulum_pitch) > np.pi/3 or
+            abs(unicycle_roll) > self.MAX_TILT_ANGLE or  # Excessive unicycle tilt
+            abs(unicycle_pitch) > self.MAX_TILT_ANGLE or
+            abs(pendulum_roll) > self.MAX_TILT_ANGLE or  # Excessive pendulum tilt
+            abs(pendulum_pitch) > self.MAX_TILT_ANGLE or
             self.goal_reached or  # Goal reached
-            self.success_count >= self.required_successes  # Required success count achieved
+            self.success_count >= self.REQUIRED_SUCCESSES  # Required success count achieved
         )
 
     def _get_info(self, x_pos, y_pos, unicycle_euler, pendulum_euler, reward):
@@ -251,25 +263,30 @@ class UnicyclePendulumTrajectory(MujocoEnv, utils.EzPickle):
             "steps": self.steps,
             "success_count": self.success_count,
             "total_episodes": self.total_episodes,
-            "strict_mode": self.strict_mode,
             "reward": reward,
         }
-
+    
     def reset_model(self):
-        # Reset model (start new episode)
         noise_low = -self._reset_noise_scale
         noise_high = self._reset_noise_scale
 
-        # Add noise to initial position and velocity
-        qpos = self.init_qpos + self.np_random.uniform(
-            size=self.model.nq, low=noise_low, high=noise_high
-        )
-        qvel = self.init_qvel + self.np_random.uniform(
-            size=self.model.nv, low=noise_low, high=noise_high
-        )
+        # More controlled initial state
+        qpos = self.init_qpos.copy()
+        qvel = self.init_qvel.copy()
+        
+        # Add small noise to position (except height)
+        qpos[0:2] += self.np_random.uniform(low=noise_low, high=noise_high, size=2)
+        
+        # Add small noise to orientation
+        qpos[3:7] += self.np_random.uniform(low=noise_low/2, high=noise_high/2, size=4)
+        qpos[3:7] /= np.linalg.norm(qpos[3:7])  # Normalize quaternion
+        
+        # Add small noise to velocities
+        qvel += self.np_random.uniform(low=noise_low, high=noise_high, size=self.model.nv)
+        
         self.set_state(qpos, qvel)
         
-        # Reset episode-related variables
+        # Reset episode variables
         self.steps = 0
         self.prev_x = 0
         self.goal_reached = False
