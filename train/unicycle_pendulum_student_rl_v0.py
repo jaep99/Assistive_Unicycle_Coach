@@ -10,7 +10,8 @@ from scipy.spatial.transform import Rotation
 import time
 
 # Create directories to hold models and logs
-data_dir = os.path.join(os.path.dirname(__file__), "..", "data")
+current_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # Go up one level from current file directory
+data_dir = os.path.join(current_dir, "data")
 model_dir = os.path.join(data_dir, "models")
 log_dir = os.path.join(data_dir, "logs")
 csv_dir = os.path.join(data_dir, "csv")
