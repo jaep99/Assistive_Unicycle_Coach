@@ -22,7 +22,6 @@ class UnicyclePendulumTrajectory(MujocoEnv, utils.EzPickle):
     
     """
     ## Student agent environment code for the Unicycle Project.
-    ## Creating the ideal solution model will be done in this code.
 
     ## Description
     This environment simulates a unicycle with an inverted pendulum attached to it. 
@@ -84,11 +83,11 @@ class UnicyclePendulumTrajectory(MujocoEnv, utils.EzPickle):
     1. The unicycle falls over (excessive tilt)
     2. The pendulum falls over (excessive tilt)
     3. The unicycle reaches the 12-meter goal
-    4. The maximum number of steps is reached (10,000 steps)
+    4. The maximum number of steps is reached (1000 steps)
 
     ## Solved Requirement
     The environment is considered solved when the agent can consistently move the unicycle 12 meters forward while maintaining balance.
-    To obtain the ideal model, training will be end once the unicycle agent passed 12 meters 100 times.
+    To obtain the ideal model, training will be end once the unicycle agent passed 12 meters 1000 times. (verified through testing 10^x goal reaching experiment)
     """
 
     def __init__(
